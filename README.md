@@ -18,10 +18,13 @@ A global customization bundle for Google Antigravity to maintain lean context wi
 
 ## Installation via Symlinks
 
-Run the following in an **Elevated (Administrator) PowerShell**:
+Clone this repository to your preferred location (e.g., `$HOME\git\antigravity-context-hygiene`), then run the following in an **Elevated (Administrator) PowerShell**:
 
 ```powershell
-# Ensure target directories exist
+# Define path to where you cloned this repository
+$RepoRoot = "$HOME\git\antigravity-context-hygiene"
+
+# Ensure target directories exist in $HOME\.gemini
 New-Item -ItemType Directory -Force -Path "$HOME\.gemini\config\rules" | Out-Null
 New-Item -ItemType Directory -Force -Path "$HOME\.gemini\config\skills" | Out-Null
 
@@ -30,8 +33,8 @@ Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$HOME\.gemini\config\
 Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$HOME\.gemini\config\skills\context-steward"
 
 # Create symbolic links
-New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\rules\context_hygiene.md" -Target "C:\Users\YuriyDzhenyeyev\git\antigravity-context-hygiene\rules\context_hygiene.md"
-New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\skills\context-steward" -Target "C:\Users\YuriyDzhenyeyev\git\antigravity-context-hygiene\skills\context-steward"
+New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\rules\context_hygiene.md" -Target "$RepoRoot\rules\context_hygiene.md"
+New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\skills\context-steward" -Target "$RepoRoot\skills\context-steward"
 ```
 
 ---
@@ -44,7 +47,7 @@ python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --health
 
 # Analyze a conversation by title keyword or UUID:
 python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py "Warehouse Monitor"
-python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py 6c379271 --details
+python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py <CONVERSATION_UUID> --details
 
 # List recent conversations:
 python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --list
