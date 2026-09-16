@@ -1,25 +1,33 @@
 ---
-description: Proactive context hygiene, milestone handoffs, and token management
+description: Universal context hygiene, token management, and multi-issue thread splitting
 trigger: always_on
 ---
 
-# Context Hygiene & Task Handoff Guidelines
+# Universal Context Hygiene & Task Handoff Guidelines
 
-To maintain high reasoning accuracy, eliminate hallucinations from stale history, and optimize latency and token efficiency across all projects:
+To maintain fast response latency, eliminate hallucinations from stale history, and maximize token efficiency across all projects and workflows (audits, features, live debugging, and support hotlines):
 
-## 1. Milestone Checkpoints
-When completing a major research, audit, or feature implementation milestone:
-- **Produce a Rich Technical Artifact**: Summarize all critical technical invariants, discovered edge cases, and architectural constraints into an artifact (`implementation_plan.md`, `walkthrough.md`, or an ADR doc).
-- **Proactively Advise on Context Handoff**: If the conversation has accumulated substantial history (>30–40 turns or >60k tokens), briefly notify the user at the end of the turn that they can either:
-  1. Continue directly in the current conversation for quick follow-ups, OR
-  2. Start a fresh, clean conversation referencing the newly created spec artifact for the next independent work package.
+## 1. Universal Conversation Depth Limit (>30–40 Turns or >60k Tokens)
+Regardless of the task type:
+- **Continuous Monitoring**: Whenever a conversation exceeds **30–40 turns** or context reaches **>60k tokens**, the agent MUST actively manage context bloat.
+- **Milestone & Phase Checkpoint**: Upon completing any substantial investigation, fix, or verification step in a heavy thread, the agent MUST summarize critical invariants and state into an artifact (`walkthrough.md`, `implementation_plan.md`, or an ADR doc).
+- **Mandatory Handoff Advisory**: Append a concise Context Health notice offering the user:
+  1. Quick follow-up in the current thread, OR
+  2. A fresh, clean conversation using an anchored handoff prompt.
 
-## 2. Research & Exploration Delegation
-- When tasked with broad codebase exploration or scanning dozens of files, delegate to a `research` subagent (`invoke_subagent`).
-- The subagent explores in an isolated branched context and returns only the concise technical findings, preventing hundreds of thousands of raw file tokens from polluting the main thread.
+## 2. Multi-Issue Topic Shift Detection
+In live debugging, hotline, or support sessions where multiple distinct issues arise sequentially:
+- **Do NOT accumulate unrelated bugs in one mega-thread**: When Issue A is resolved/verified and a new distinct topic, bug, or subsystem (Issue B) is introduced:
+  - Summarize the resolution of Issue A into an artifact.
+  - Proactively advise splitting: *"Issue A is resolved and documented. Since this conversation has substantial history, I recommend opening a fresh thread for Issue B to keep latency fast and prevent context pollution."*
+  - Provide a ready-to-use anchored prompt for Issue B.
 
 ## 3. Lossless Handoff Pattern
-When advising the user to start a new thread for a sub-task, provide them with a ready-to-use **anchored handoff prompt** that includes:
-- Link to the specification artifact (`@[file:path/to/spec.md]`)
-- Links to the exact target files (`@[file:path/to/target]`)
-- Reference to the parent conversation (`@[conversation:"..."]`) for historical provenance if needed.
+Every handoff advisory MUST be lossless, containing:
+- Direct link to the specification/summary artifact (`@[file:path/to/artifact.md]`)
+- Links to exact target code files (`@[file:path/to/target]`)
+- Reference to the parent conversation (`@[conversation:"..."]`) for historical context on-demand.
+
+## 4. Research & Exploration Delegation
+- Delegate broad searches across dozens of files to a `research` subagent (`invoke_subagent`).
+- The subagent explores in an isolated context and returns only concise technical findings, protecting the main conversation from hundreds of thousands of raw file tokens.
