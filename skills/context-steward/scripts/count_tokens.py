@@ -23,6 +23,7 @@ import os
 import re
 import sqlite3
 import sys
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -531,6 +532,9 @@ def print_terminal_report(data: Dict[str, Any], show_details: bool = False):
     print(f"   - Net New Tokens (Uncached+Out):{summary['billable_new_tokens']:>12,}")
     print("-" * 74)
     print(f" GUIDANCE: {health['recommendation']}")
+    if health["status"] in ("HEAVY", "MODERATE"):
+        print(f"\n💡 Pro-tip: Run with --handoff to generate a lossless handoff prompt:")
+        print(f"   python {Path(__file__).name} {data['id'][:8]} --handoff")
     print("=" * 74)
 
     if data["phases"]:
@@ -552,6 +556,74 @@ def print_terminal_report(data: Dict[str, Any], show_details: bool = False):
 
 
 # ==============================================================================
+# Lossless Handoff Generator
+# ==============================================================================
+
+def generate_handoff_prompt(conv_id: str, title: str, search_dirs: List[Path]) -> Tuple[str, Optional[Path]]:
+    """Extracts artifacts and modified files to generate a lossless handoff prompt."""
+    brain_dir = None
+    for b in search_dirs:
+        bd = b / "brain" / conv_id
+        if bd.exists():
+            brain_dir = bd
+            break
+
+    artifact = None
+    if brain_dir:
+        for fname in ["implementation_plan.md", "walkthrough.md"]:
+            candidate = brain_dir / fname
+            if candidate.exists():
+                artifact = candidate
+                break
+        if not artifact:
+            md_files = [f for f in brain_dir.glob("*.md") if not f.name.endswith(".metadata.json")]
+            if md_files:
+                artifact = sorted(md_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
+
+    task_name = title
+    targets = []
+    if artifact:
+        content = artifact.read_text(encoding="utf-8", errors="ignore")
+        title_m = re.search(r"^#\s+(.+)$", content, re.M)
+        if title_m:
+            raw_t = title_m.group(1).strip()
+            task_name = re.sub(r"^(Implementation Plan:?\s*|Walkthrough:?\s*)", "", raw_t, flags=re.IGNORECASE)
+        for m in re.finditer(r"####\s+\[(?:MODIFY|NEW|DELETE)\]\s+\[([^\]]+)\]\((?:file:///)?([^)#]+)\)", content):
+            raw_path = urllib.parse.unquote(m.group(2).strip())
+            targets.append(raw_path)
+
+    lines = []
+    if artifact:
+        lines.append(f"Please implement {task_name} according to @[file:{artifact.as_posix()}].")
+    else:
+        lines.append(f"Please continue {task_name}.")
+
+    if targets:
+        lines.append("Primary code files:")
+        for t in dict.fromkeys(targets):
+            lines.append(f"- @[file:{t}]")
+    lines.append(f'Reference parent conversation: @[conversation:"{title}"].')
+    return "\n".join(lines), artifact
+
+
+def print_handoff_report(conv_id: str, title: str, search_dirs: List[Path]):
+    """Renders a ready-to-copy lossless handoff prompt."""
+    prompt, artifact = generate_handoff_prompt(conv_id, title, search_dirs)
+    print("=" * 74)
+    print(f" LOSSLESS HANDOFF PROMPT: {title}")
+    print(f" Conversation ID: {conv_id}")
+    if artifact:
+        print(f" Target Artifact: {artifact.as_posix()}")
+    print("=" * 74)
+    print("\nCopy and paste the block below into a fresh conversation:\n")
+    print("-" * 74)
+    print(prompt)
+    print("-" * 74)
+    print("\nTip: Launching a fresh thread eliminates the prior conversation history tax")
+    print("     while maintaining 100% specification and file context.")
+
+
+# ==============================================================================
 # Main Entry Point
 # ==============================================================================
 
@@ -564,6 +636,7 @@ Examples:
   python count_tokens.py --health          # Check health of current conversation
   python count_tokens.py "Warehouse Monitor Custom Button"
   python count_tokens.py 6c379271 --details
+  python count_tokens.py 6c379271 --handoff
   python count_tokens.py --list
   python count_tokens.py 6c379271 --json
         """,
@@ -584,6 +657,11 @@ Examples:
         "-H", "--health",
         action="store_true",
         help="Show concise Context Health badge and split recommendation.",
+    )
+    parser.add_argument(
+        "-o", "--handoff",
+        action="store_true",
+        help="Generate an anchored Lossless Handoff prompt for splitting into a fresh thread.",
     )
     parser.add_argument(
         "-n", "--limit",
@@ -638,6 +716,8 @@ Examples:
         print(json.dumps(result, indent=2))
     elif args.health:
         print_health_badge(result)
+    elif args.handoff:
+        print_handoff_report(db_path.stem, title or result.get("title", "(Untitled)"), search_dirs)
     else:
         print_terminal_report(result, show_details=args.details)
 

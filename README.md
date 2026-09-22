@@ -49,6 +49,9 @@ python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --health
 python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py "Warehouse Monitor"
 python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py <CONVERSATION_UUID> --details
 
+# Generate an anchored Lossless Handoff prompt for a fresh conversation:
+python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py <CONVERSATION_UUID> --handoff
+
 # List recent conversations:
 python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --list
 ```

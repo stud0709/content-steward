@@ -29,5 +29,13 @@ Every handoff advisory MUST be lossless, containing:
 - Reference to the parent conversation (`@[conversation:"..."]`) for historical context on-demand.
 
 ## 4. Research & Exploration Delegation
-- Delegate broad searches across dozens of files to a `research` subagent (`invoke_subagent`).
+- **Exploratory Spike Threshold**: When investigating an issue spanning multiple subsystems (e.g., Domain -> Server -> Client -> Presentation) or requiring iterative searching across files, delegate the spike to a `research` subagent (`invoke_subagent`).
 - The subagent explores in an isolated context and returns only concise technical findings, protecting the main conversation from hundreds of thousands of raw file tokens.
+- **Monolithic File Ingestion**: Files >50 KB (e.g., god-controllers, large client sync classes) MUST NEVER be repeatedly read in full or large slices in the main thread. Use narrow line slicing (`StartLine`/`EndLine`), symbol lookups, or delegate code tracing to a subagent.
+
+## 5. Planning Phase Boundary Handoff
+Authoring an `implementation_plan.md` represents the cleanest transition boundary in software workflows (Discovery -> Execution):
+- Whenever an implementation plan is authored in a conversation that is already **🟡 MODERATE** or **🔴 HEAVY** (>25–30 turns or >40k tokens), the agent MUST treat planning as a phase boundary.
+- Do NOT begin executing code edits directly in that bloated thread.
+- Automatically present the approved plan alongside a ready-to-copy **Lossless Handoff prompt** (or launch execution in an isolated subagent) so coding and verification begin in a lean, high-speed context (`🟢 LEAN`).
+
