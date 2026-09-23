@@ -39,3 +39,38 @@ Authoring an `implementation_plan.md` represents the cleanest transition boundar
 - Do NOT begin executing code edits directly in that bloated thread.
 - Automatically present the approved plan alongside a ready-to-copy **Lossless Handoff prompt** (or launch execution in an isolated subagent) so coding and verification begin in a lean, high-speed context (`🟢 LEAN`).
 
+## 6. Proactive Execution Delegation & Dynamic Model Routing
+To prevent the main conversation from degrading during iterative code modifications, compiling, and testing loops:
+
+### A. Execution Fast-Path vs. Mandatory Subagent Delegation
+- **In-Thread Fast Path (Allowed)**:
+  - Edits affecting **$\le 1$ file**, **$< 30$ lines**, with **deterministic outcomes** (e.g., updating a config, fixing an obvious typo, adding a missing import or type annotation) MAY be executed directly in the main thread provided the thread is `🟢 LEAN`.
+- **Mandatory Subagent Delegation**:
+  - You MUST delegate execution to a subagent (`invoke_subagent`) when:
+    1. The change spans **$\ge 2$ files**.
+    2. The fix requires an **iterative test / verify / debug loop** (running test suites, interpreting compiler errors, adjusting assertions).
+    3. The task involves a complex refactor or algorithmic rewrite.
+
+### B. Dynamic Model Selection Matrix
+Before delegating, inspect target code ($\le 2$ files) to assess complexity and pass the optimal `Model` tier to `invoke_subagent`:
+
+| Task Profile / Complexity Signals | Model Tier | Workspace Mode | Role / Pattern |
+| :--- | :--- | :--- | :--- |
+| **Exploration & Scaffolding**<br>• Searching >3 files or repo-wide scans<br>• Extracting API schemas / call graphs<br>• Summarizing documentation or dependencies | `flash` *(or `flash_lite`)* | `inherit` | `research` subagent |
+| **Deterministic / Low-Risk Execution**<br>• Straightforward multi-file boilerplate or CRUD<br>• Adding tests against an already green test harness<br>• Standard library or routine framework updates | `flash` | `inherit` *(active dev)* | `self` subagent |
+| **Deep Agentic Reasoning & Debugging**<br>• Race conditions, async timing, or memory leaks<br>• Intricate cross-package refactoring<br>• Writing reproduction harnesses for elusive bugs | `pro` *(or `inherit`)* | `inherit` *(active dev)* | `self` subagent |
+| **Speculative / High-Risk Experiments**<br>• Experimental architectural spikes<br>• Potentially destructive git/file modifications | `flash` or `pro` | `branch` *(isolated)* | `self` subagent |
+
+### C. Workspace Mode Policy (`inherit` vs `branch`)
+- **`Workspace: "inherit"` (Default for Active Pair Programming)**:
+  - Applies file edits directly to the user's working tree so changes and test results are immediately visible in the active workspace. Use this for standard features, fixes, and tests.
+- **`Workspace: "branch"` (Isolated Sandbox)**:
+  - Isolates filesystem edits into an ephemeral git branch. Use ONLY for speculative spikes or high-risk tests where you explicitly do not want unverified code touching the working tree.
+
+### D. The Structured Execution Packet (Preventing Subagent Amnesia)
+Because subagents do NOT inherit parent conversation history, every delegation prompt MUST provide a self-contained execution packet:
+1. **Target Files**: Explicit file paths and relevant line ranges.
+2. **Context & Hypothesis**: Exact error message, suspected root cause, or design spec.
+3. **Acceptance Criteria**: Concrete commands to verify (e.g., `npm test`, `go test ./...`, or expected assertion output).
+4. **Auto-Escalation**: If a `flash` subagent fails verification after 2 iterations, abort the worker and re-dispatch the failure trace to a `pro` subagent.
+
