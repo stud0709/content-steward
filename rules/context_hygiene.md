@@ -30,7 +30,7 @@ Every handoff advisory MUST be lossless, containing:
 
 ## 4. Research & Exploration Delegation
 - **Exploratory Spike Threshold**: When investigating an issue spanning multiple subsystems (e.g., Domain -> Server -> Client -> Presentation) or requiring iterative searching across files, delegate the spike to a `research` subagent (`invoke_subagent`).
-- The subagent explores in an isolated context and returns only concise technical findings, protecting the main conversation from hundreds of thousands of raw file tokens.
+- **Hard Cap on In-Thread Research**: If an investigation, bug audit, or codebase search requires **>3 search/read tool calls** or touches **>2 files**, you MUST NOT continue exploratory searching in the main thread. Immediately dispatch a `research` subagent (`Model: 'flash'`) to absorb the file tokens and return concise architectural findings. Never accumulate dozens of `view_file` and `grep_search` calls in the parent context.
 - **Monolithic File Ingestion**: Files >50 KB (e.g., god-controllers, large client sync classes) MUST NEVER be repeatedly read in full or large slices in the main thread. Use narrow line slicing (`StartLine`/`EndLine`), symbol lookups, or delegate code tracing to a subagent.
 
 ## 5. Planning Phase Boundary Handoff
@@ -38,6 +38,7 @@ Authoring an `implementation_plan.md` represents the cleanest transition boundar
 - Whenever an implementation plan is authored in a conversation that is already **🟡 MODERATE** or **🔴 HEAVY** (>25–30 turns or >40k tokens), the agent MUST treat planning as a phase boundary.
 - Do NOT begin executing code edits directly in that bloated thread.
 - Automatically present the approved plan alongside a ready-to-copy **Lossless Handoff prompt** (or launch execution in an isolated subagent) so coding and verification begin in a lean, high-speed context (`🟢 LEAN`).
+- **Handoff Execution Invariant**: When a fresh conversation is started via a Lossless Handoff prompt with an approved specification/plan, or when the user prompts "proceed" on an approved plan, the orchestrator MUST NOT execute code edits, run build/test commands, or repeatedly inspect files directly in the main thread. It must immediately package the scope into an Execution Packet (§ 6.D) and dispatch the worker subagent.
 
 ## 6. Proactive Execution Delegation & Dynamic Model Routing
 To prevent the main conversation from degrading during iterative code modifications, compiling, and testing loops:
@@ -50,6 +51,8 @@ To prevent the main conversation from degrading during iterative code modificati
     1. The change spans **$\ge 2$ files**.
     2. The fix requires an **iterative test / verify / debug loop** (running test suites, interpreting compiler errors, adjusting assertions).
     3. The task involves a complex refactor or algorithmic rewrite.
+- **Follow-Up Re-evaluation (Zero Creep)**:
+  - Follow-up turns within an existing thread are strictly bound by the same delegation thresholds. If a follow-up request (e.g., adding a button, tweaking a handler) requires searching >2 files, modifying $\ge 2$ files, or running verification/service restart loops, it MUST NOT remain in the main thread. Delegate the task to a subagent to prevent incremental context creep.
 
 ### B. Dynamic Model Selection Matrix
 Before delegating, inspect target code ($\le 2$ files) to assess complexity and pass the optimal `Model` tier to `invoke_subagent`:
@@ -70,7 +73,9 @@ Before delegating, inspect target code ($\le 2$ files) to assess complexity and 
 ### D. The Structured Execution Packet (Preventing Amnesia & Read Churn)
 Because subagents do NOT inherit parent conversation history, every delegation prompt MUST provide a self-contained execution packet:
 
-1. **Target Files**: Explicit file paths demarcated with `[NEW]` and `[MODIFY]`.
+1. **Target Files & Scope Granularity ($\le 3–5$ Files per Worker)**:
+   - Explicit file paths demarcated with `[NEW]` and `[MODIFY]`.
+   - Never dump dozens of files across multiple unrelated bug categories (e.g., 10–20 files) onto a single worker subagent; doing so causes pre-flight read churn. Decompose large plans into cohesive clusters of **$\le 3–5$ files** per worker.
 2. **Context & Technical Spec**: Exact design spec, structs, schemas, or suspected root cause.
 3. **Contract Reference Anchors**:
    - Never leave internal API signatures or database patterns underspecified.
