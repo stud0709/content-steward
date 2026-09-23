@@ -67,10 +67,18 @@ Before delegating, inspect target code ($\le 2$ files) to assess complexity and 
 - **`Workspace: "branch"` (Isolated Sandbox)**:
   - Isolates filesystem edits into an ephemeral git branch. Use ONLY for speculative spikes or high-risk tests where you explicitly do not want unverified code touching the working tree.
 
-### D. The Structured Execution Packet (Preventing Subagent Amnesia)
+### D. The Structured Execution Packet (Preventing Amnesia & Read Churn)
 Because subagents do NOT inherit parent conversation history, every delegation prompt MUST provide a self-contained execution packet:
-1. **Target Files**: Explicit file paths and relevant line ranges.
-2. **Context & Hypothesis**: Exact error message, suspected root cause, or design spec.
-3. **Acceptance Criteria**: Concrete commands to verify (e.g., `npm test`, `go test ./...`, or expected assertion output).
-4. **Auto-Escalation**: If a `flash` subagent fails verification after 2 iterations, abort the worker and re-dispatch the failure trace to a `pro` subagent.
+
+1. **Target Files**: Explicit file paths demarcated with `[NEW]` and `[MODIFY]`.
+2. **Context & Technical Spec**: Exact design spec, structs, schemas, or suspected root cause.
+3. **Contract Reference Anchors**:
+   - Never leave internal API signatures or database patterns underspecified.
+   - Always supply 1–2 file and line anchors to existing implementations (e.g., `DB connection pattern: handlers/logs.go#L25-L45`, `Discovery struct: adt/session.go#L140-L160`) so the worker does not run broad repository greps or scan dependencies.
+4. **Mandatory Worker Directives (Embed in Subagent Prompt)**:
+   - **Suppress Meta-Planning**: *"Planning is already completed and approved in the parent conversation. Do NOT author an implementation plan or design document; proceed directly to implementation."*
+   - **Staged Phasing (Logic $\rightarrow$ Verify $\rightarrow$ Docs)**: *"Do NOT read documentation templates or secondary markdown files up-front. Implement core code, verify with test commands, and only inspect/edit documentation templates once all tests pass."*
+   - **Targeted Grounding**: *"Do NOT run broad repository scans or read whole files. Read only the specific line anchors provided to verify types."*
+5. **Concrete Acceptance Criteria**: Exact terminal commands to verify (e.g., `npm test`, `go test ./...`, or build scripts).
+6. **Auto-Escalation**: If a `flash` subagent fails verification after 2 iterations, abort the worker and re-dispatch the failure trace to a `pro` subagent.
 
