@@ -14,9 +14,15 @@ Regardless of the task type:
 - **Mandatory Handoff Advisory**: Append a concise Context Health notice offering the user:
   1. Quick follow-up in the current thread, OR
   2. A fresh, clean conversation using an anchored handoff prompt.
-- **Automated Handoff Generation Mandate**: Whenever finalizing a `walkthrough.md`, completing a plan verification in a `🟡 MODERATE`/`🔴 HEAVY` thread, or upon receiving a `[CONTEXT HEALTH ALERT: 🔴 HEAVY]` hook notice:
-  1. You MUST execute: `python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --handoff`
-  2. You MUST append the stdout (the ready-to-copy Lossless Handoff block) verbatim to the bottom of your response.
+- **Automated Handoff Generation Mandate (Boundary-Driven)**:
+  - **When to Generate**: Run the handoff generator ONLY at natural transition boundaries:
+    1. Upon finalizing/updating a `walkthrough.md` or completing a verification milestone in a thread with >25 turns or >40k tokens.
+    2. When presenting an approved `implementation_plan.md` at a phase boundary (§ 5).
+    3. When a user introduces a new distinct topic or subsystem in an already heavy thread (§ 2).
+  - **When NOT to Generate**: Never append handoff blocks during active work in progress, normal conversational Q&A, follow-up tweaks, or active pair-debugging loops.
+  - **Action**: When a transition boundary is reached, execute:
+    `python ~/.gemini/config/skills/context-steward/scripts/count_tokens.py --handoff`
+    and append the stdout (the ready-to-copy Lossless Handoff block) verbatim to the bottom of the milestone completion or planning message.
 
 ## 2. Multi-Issue Topic Shift Detection
 In live debugging, hotline, or support sessions where multiple distinct issues arise sequentially:

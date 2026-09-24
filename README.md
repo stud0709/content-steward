@@ -17,7 +17,7 @@ A global customization bundle for Google Antigravity to maintain lean context wi
 
 ---
 
-## Installation via Symlinks / Hardlinks
+## Installation via Symlinks
 
 Clone this repository to your preferred location (e.g., `$HOME\git\antigravity-context-hygiene`), then run the following in PowerShell:
 
@@ -32,12 +32,10 @@ New-Item -ItemType Directory -Force -Path "$HOME\.gemini\config\skills" | Out-Nu
 # Remove existing files/folders if present
 Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$HOME\.gemini\config\rules\context_hygiene.md"
 Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$HOME\.gemini\config\skills\context-steward"
-Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "$HOME\.gemini\config\hooks.json"
 
-# Create symbolic links (or hardlink for hooks.json)
+# Create symbolic links
 New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\rules\context_hygiene.md" -Target "$RepoRoot\rules\context_hygiene.md"
 New-Item -ItemType SymbolicLink -Path "$HOME\.gemini\config\skills\context-steward" -Target "$RepoRoot\skills\context-steward"
-New-Item -ItemType HardLink -Path "$HOME\.gemini\config\hooks.json" -Target "$RepoRoot\hooks.json"
 ```
 
 ---

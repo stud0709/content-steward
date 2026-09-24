@@ -1,5 +1,6 @@
 {
   "context-health-guard": {
+    "enabled": false,
     "PreInvocation": [
       {
         "type": "command",
