@@ -559,7 +559,7 @@ def print_terminal_report(data: Dict[str, Any], show_details: bool = False):
 # Lossless Handoff Generator
 # ==============================================================================
 
-def generate_handoff_prompt(conv_id: str, title: str, search_dirs: List[Path]) -> Tuple[str, Optional[Path]]:
+def generate_handoff_prompt(conv_id: str, title: str, search_dirs: List[Path], target_artifact: Optional[Path] = None) -> Tuple[str, Optional[Path]]:
     """Extracts artifacts and modified files to generate a lossless handoff prompt."""
     brain_dir = None
     for b in search_dirs:
@@ -569,7 +569,9 @@ def generate_handoff_prompt(conv_id: str, title: str, search_dirs: List[Path]) -
             break
 
     artifact = None
-    if brain_dir:
+    if target_artifact and target_artifact.exists():
+        artifact = target_artifact
+    elif brain_dir:
         for fname in ["implementation_plan.md", "walkthrough.md"]:
             candidate = brain_dir / fname
             if candidate.exists():
@@ -582,15 +584,18 @@ def generate_handoff_prompt(conv_id: str, title: str, search_dirs: List[Path]) -
 
     task_name = title
     targets = []
-    if artifact:
-        content = artifact.read_text(encoding="utf-8", errors="ignore")
-        title_m = re.search(r"^#\s+(.+)$", content, re.M)
-        if title_m:
-            raw_t = title_m.group(1).strip()
-            task_name = re.sub(r"^(Implementation Plan:?\s*|Walkthrough:?\s*)", "", raw_t, flags=re.IGNORECASE)
-        for m in re.finditer(r"####\s+\[(?:MODIFY|NEW|DELETE)\]\s+\[([^\]]+)\]\((?:file:///)?([^)#]+)\)", content):
-            raw_path = urllib.parse.unquote(m.group(2).strip())
-            targets.append(raw_path)
+    if artifact and artifact.exists():
+        try:
+            content = artifact.read_text(encoding="utf-8", errors="ignore")
+            title_m = re.search(r"^#\s+(.+)$", content, re.M)
+            if title_m:
+                raw_t = title_m.group(1).strip()
+                task_name = re.sub(r"^(Implementation Plan:?\s*|Walkthrough:?\s*)", "", raw_t, flags=re.IGNORECASE)
+            for m in re.finditer(r"####\s+\[(?:MODIFY|NEW|DELETE)\]\s+\[([^\]]+)\]\((?:file:///)?([^)#]+)\)", content):
+                raw_path = urllib.parse.unquote(m.group(2).strip())
+                targets.append(raw_path)
+        except Exception:
+            pass
 
     lines = []
     if artifact:

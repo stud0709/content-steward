@@ -1,10 +1,10 @@
 {
   "context-health-guard": {
-    "enabled": false,
+    "enabled": true,
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python skills/context-steward/scripts/health_hook.py",
+        "command": "python C:/Users/YuriyDzhenyeyev/.gemini/config/skills/context-steward/scripts/health_hook.py",
         "timeout": 5
       }
     ]
