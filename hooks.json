@@ -1,0 +1,11 @@
+{
+  "context-health-guard": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python skills/context-steward/scripts/health_hook.py",
+        "timeout": 5
+      }
+    ]
+  }
+}
