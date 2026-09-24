@@ -6,14 +6,16 @@ Executed by Antigravity runtime prior to model invocations.
 Transition-Boundary Aware Context Health Guard:
 - Monitors conversation token count and depth.
 - Silent on LEAN contexts (<40k tokens & <20 turns).
-- On HEAVY (>60k-80k tokens) or MODERATE (turns >= 25):
+- If MODERATE (<25 turns) and no artifact written: silent.
+- On HEAVY or MODERATE:
   * Transition Boundary (Artifact written: implementation_plan.md or walkthrough.md):
     Injects transition boundary advisory with embedded Lossless Handoff prompt.
-  * Execution Approval Boundary (user says 'proceed', 'go ahead', etc. with existing plan):
-    Injects execution boundary warning advising subagent delegation or fresh conversation.
-  * Non-Boundary / In-Progress Q&A:
-    If HEAVY: Injects quiet context telemetry warning the model NOT to nag or emit handoffs.
-    If MODERATE: Silent.
+- On HEAVY:
+  * Active Plan Telemetry (implementation_plan.md exists in brain directory):
+    Injects telemetry advising the model: if user approves execution, delegate or fresh thread;
+    if user clarifies/inquires, answer concisely without nagging.
+  * General In-Progress Telemetry (no active plan):
+    Injects quiet context telemetry warning the model to answer concisely and not nag.
 """
 
 import json
@@ -32,52 +34,6 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-
-
-def is_execution_command(text: str) -> bool:
-    """Checks if the user's input is an execution approval / launch command."""
-    if not text:
-        return False
-
-    # Remove XML / markdown tags like <USER_REQUEST>, <ADDITIONAL_METADATA>, etc.
-    clean = re.sub(r"<[^>]+>", " ", text)
-    clean = clean.strip()
-    if not clean:
-        return False
-
-    # If the user is asking a question, it's not an execution command
-    if clean.endswith("?"):
-        return False
-
-    first_few = clean.lower()[:30]
-    if re.search(r"\b(is|are|why|how|what|where|when|who|which|can|could|should|would)\b", first_few):
-        return False
-
-    # Normalize: remove apostrophes and punctuation, lowercase
-    clean_no_apos = clean.replace("'", "").replace("’", "")
-    norm = re.sub(r"[^\w\s]", " ", clean_no_apos).strip().lower()
-    norm = " ".join(norm.split())
-
-    exact_commands = {
-        "proceed", "go ahead", "implement", "start", "approved", "approve",
-        "yes", "do it", "lets go", "run it", "execute", "lgtm",
-        "looks good", "go for it", "please proceed", "continue", "make it so",
-        "sounds good proceed", "looks good proceed", "yes please", "yes proceed",
-        "ready to proceed", "confirmed", "confirm"
-    }
-    if norm in exact_commands:
-        return True
-
-    words = norm.split()
-    if len(words) <= 10:
-        first_word = words[0] if words else ""
-        first_two = " ".join(words[:2]) if len(words) >= 2 else ""
-        if first_word in {"proceed", "implement", "start", "execute"} or first_two in {
-            "go ahead", "do it", "lets go", "please proceed", "run it"
-        }:
-            return True
-
-    return False
 
 
 def extract_user_request_text(content: str) -> str:
@@ -184,6 +140,77 @@ def detect_written_artifact(
     return None
 
 
+def check_plan_exists(
+    steps: List[Dict[str, Any]],
+    artifact_dir: Optional[Path],
+    is_sliced: bool = False
+) -> bool:
+    """
+    Checks if an implementation_plan.md is currently active for the conversation.
+    A plan is active if implementation_plan.md exists and has not been superseded
+    by a subsequent walkthrough.md completing the milestone.
+    """
+    if not artifact_dir:
+        return False
+
+    plan_file = artifact_dir / "implementation_plan.md"
+    if not plan_file.exists():
+        return False
+
+    # 1. If steps are available from transcript (sliced or unsliced), check step order
+    if steps:
+        last_plan_step = None
+        last_walk_step = None
+        for s in steps:
+            tool_calls = s.get("tool_calls", [])
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                name = call.get("name") or call.get("tool_name")
+                if name == "write_to_file":
+                    args = call.get("args", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {}
+                    target_file = str(args.get("TargetFile", "")).strip('\"\'').replace("\\", "/").lower()
+                    if target_file.endswith("/implementation_plan.md") or target_file == "implementation_plan.md":
+                        last_plan_step = s.get("step_index")
+                    elif target_file.endswith("/walkthrough.md") or target_file == "walkthrough.md":
+                        last_walk_step = s.get("step_index")
+
+        if last_plan_step is not None:
+            if last_walk_step is not None and last_walk_step > last_plan_step:
+                # Walkthrough was written after the plan, so the plan is already completed
+                return False
+            return True
+
+        if is_sliced:
+            # Plan was not authored in the sliced steps; check if file mtime was before the sliced step
+            last_step_time = parse_step_timestamp(steps[-1])
+            if last_step_time is not None:
+                try:
+                    mtime = plan_file.stat().st_mtime
+                    if mtime > (last_step_time + 10):
+                        return False
+                except Exception:
+                    pass
+
+    # 2. Filesystem mtime check: if walkthrough is newer than plan, plan is completed
+    walk_file = artifact_dir / "walkthrough.md"
+    if walk_file.exists():
+        try:
+            if walk_file.stat().st_mtime > plan_file.stat().st_mtime:
+                return False
+        except Exception:
+            pass
+
+    return True
+
+
 def main():
     try:
         raw_input = sys.stdin.read()
@@ -224,13 +251,8 @@ def main():
         current_context = stats.get("current_context_tokens", 0)
         total_turns = stats.get("total_turns", 0)
 
-        # Silent on LEAN or small conversations
+        # Silent on LEAN or small conversations (<40k tokens & <20 turns)
         if status == "LEAN" or (current_context < 40000 and total_turns < 20):
-            print("{}")
-            return
-
-        # Only evaluate boundaries if HEAVY or MODERATE with total_turns >= 25
-        if status != "HEAVY" and not (status == "MODERATE" and total_turns >= 25):
             print("{}")
             return
 
@@ -262,6 +284,13 @@ def main():
 
         # Load and slice transcript steps
         steps = []
+        is_sliced = bool(
+            payload.get("stepIdx")
+            or payload.get("step_index")
+            or payload.get("targetStep")
+            or payload.get("target_step")
+            or payload.get("initialNumSteps")
+        )
         if transcript_path and transcript_path.exists():
             try:
                 raw_lines = transcript_path.read_text(encoding="utf-8", errors="ignore").strip().split("\n")
@@ -273,7 +302,6 @@ def main():
         # Find latest USER_INPUT and its timestamp
         user_steps = [s for s in steps if s.get("type") == "USER_INPUT"]
         latest_user_step = user_steps[-1] if user_steps else None
-        latest_user_text = extract_user_request_text(latest_user_step.get("content", "")) if latest_user_step else ""
         latest_user_time = parse_step_timestamp(latest_user_step) if latest_user_step else None
 
         # Check A: Transition Boundary (Artifact Written)
@@ -300,44 +328,32 @@ def main():
             print(json.dumps(output))
             return
 
-        # Check B: Execution Approval Boundary
-        plan_exists = False
-        if artifact_dir and (artifact_dir / "implementation_plan.md").exists():
-            plan_exists = True
+        # If MODERATE and no artifact written: return {} (silent)
+        if status != "HEAVY":
+            print("{}")
+            return
 
-        if plan_exists and is_execution_command(latest_user_text):
-            target_art_path = (artifact_dir / "implementation_plan.md") if artifact_dir else None
-            handoff_text, artifact = count_tokens.generate_handoff_prompt(
-                conv_id, title or "(Untitled)", search_dirs, target_artifact=target_art_path
-            )
-            status_str = "🔴 HEAVY" if status == "HEAVY" else "🟡 MODERATE"
+        # Check B: Active Plan Telemetry (implementation_plan.md exists and status == HEAVY)
+        if check_plan_exists(steps, artifact_dir, is_sliced):
             msg = (
-                f"[EXECUTION BOUNDARY IN {status_str} CONTEXT ({current_context:,} tokens)]\n"
-                f"The user requested execution, but this conversation is {status_str} ({current_context:,} tokens).\n"
-                f"Per Universal Context Hygiene (§ 1, § 5, & § 6):\n"
-                f"1. Recommend launching a fresh thread using the Lossless Handoff prompt below, OR\n"
-                f"2. If continuing in this thread, you MUST NOT execute code edits or run test loops directly in the parent context. You MUST package the scope into an Execution Packet and immediately delegate to a worker subagent.\n\n"
-                f"--------------------------------------------------------------------------\n"
-                f"{handoff_text}\n"
-                f"--------------------------------------------------------------------------"
+                f"[Context Telemetry: 🔴 HEAVY ({current_context:,} tokens) | Active Plan]\n"
+                f"- If the user is approving, confirming, or requesting implementation (e.g. \"sounds good\", \"proceed\", \"go ahead\", \"let's do it\"):\n"
+                f"  Per Universal Rules § 5 & § 6, do NOT execute code edits directly in this main thread. Either reiterate the Lossless Handoff prompt to run in a fresh lean thread, or delegate immediately to a worker subagent with an Execution Packet.\n"
+                f"- If the user is asking an inquiry or clarifying:\n"
+                f"  Answer concisely. Do NOT nag the user and do NOT append handoff prompts during normal conversational Q&A."
             )
             output = {"injectSteps": [{"ephemeralMessage": msg}]}
             print(json.dumps(output))
             return
 
-        # Check C: Non-Boundary / In-Progress Q&A
-        if status == "HEAVY":
-            msg = (
-                f"[Context Telemetry: 🔴 HEAVY ({current_context:,} tokens in context)]\n"
-                f"Active in-progress turn. Answer the user's inquiry concisely.\n"
-                f"NOTE: Do NOT nag the user and do NOT append handoff prompts during normal conversational Q&A. Reserve handoffs strictly for plan/milestone boundaries."
-            )
-            output = {"injectSteps": [{"ephemeralMessage": msg}]}
-            print(json.dumps(output))
-            return
-
-        # If MODERATE and not at a boundary: silent
-        print("{}")
+        # Check C: General In-Progress Telemetry (status == HEAVY, no plan active)
+        msg = (
+            f"[Context Telemetry: 🔴 HEAVY ({current_context:,} tokens in context)]\n"
+            f"Active in-progress turn. Answer the user's inquiry concisely.\n"
+            f"NOTE: Do NOT nag the user and do NOT append handoff prompts during normal conversational Q&A. Reserve handoffs strictly for plan/milestone boundaries."
+        )
+        output = {"injectSteps": [{"ephemeralMessage": msg}]}
+        print(json.dumps(output))
     except Exception:
         # Failsafe: never break the agent invocation
         print("{}")

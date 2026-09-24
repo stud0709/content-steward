@@ -3,13 +3,14 @@
 Test Suite for Transition-Boundary-Aware Context Health Hook
 ============================================================
 Tests:
-- Unit parsing and helper functions (is_execution_command, step slicing, artifact detection)
-- Error handling on malformed/empty stdin
+- Unit parsing and helper functions (step slicing, artifact detection, plan checking)
+- Payload parsing and BOM handling
 - Real conversation 82061474-e281-4a81-a2eb-73c9a7af8842:
-  * step 550: in-progress Q&A inquiry -> quiet telemetry mode (no handoff prompt)
-  * step 558: transition boundary after write_to_file implementation_plan.md -> full handoff prompt
-  * direct end-of-transcript pipe invocation
-- Boundary logic on execution approval commands
+  * test_lean_conversation_silent: LEAN context returns {}
+  * test_heavy_conversation_qa_mode: Step 550 Q&A inquiry -> quiet telemetry mode (no handoff prompt, no active plan)
+  * test_heavy_conversation_artifact_boundary: Step 558 transition boundary after write_to_file implementation_plan.md
+  * test_heavy_conversation_active_plan_telemetry: user turn when plan exists -> active plan telemetry guidance
+- Direct end-of-transcript pipe invocation
 - Compliance with Antigravity PreInvocation schema: {"injectSteps": [{"ephemeralMessage": ...}]} or {}
 """
 
@@ -33,53 +34,6 @@ REAL_CONV_ID = "82061474-e281-4a81-a2eb-73c9a7af8842"
 
 class TestHealthHookUnit(unittest.TestCase):
     """Unit tests for individual helper functions in health_hook.py."""
-
-    def test_is_execution_command_positive(self):
-        positive_samples = [
-            "proceed",
-            "go ahead",
-            "implement",
-            "start",
-            "approved",
-            "approve",
-            "yes",
-            "do it",
-            "please proceed",
-            "go ahead and implement",
-            "lets go",
-            "let's go",
-            "execute",
-            "lgtm",
-            "looks good",
-            "sounds good proceed",
-            "<USER_REQUEST>\nproceed\n</USER_REQUEST>",
-            "<USER_REQUEST>\n  go ahead  \n</USER_REQUEST>",
-        ]
-        for sample in positive_samples:
-            self.assertTrue(
-                health_hook.is_execution_command(sample),
-                f"Expected '{sample}' to be recognized as execution command",
-            )
-
-    def test_is_execution_command_negative(self):
-        negative_samples = [
-            'are "banned / blocked / rate-limited" standard values or does every server send whatever it wants?',
-            "is this implemented?",
-            "what is the difference between X and Y?",
-            "can we test this?",
-            "why did the test fail?",
-            "make a plan",
-            "where is the config file located?",
-            "how does NIP-20 work?",
-            "",
-            "   ",
-            "<USER_REQUEST>\nis this working?\n</USER_REQUEST>",
-        ]
-        for sample in negative_samples:
-            self.assertFalse(
-                health_hook.is_execution_command(sample),
-                f"Expected '{sample}' NOT to be recognized as execution command",
-            )
 
     def test_extract_user_request_text(self):
         xml_content = "<USER_REQUEST>\nhello world\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ninfo\n</ADDITIONAL_METADATA>"
@@ -147,6 +101,15 @@ class TestHealthHookUnit(unittest.TestCase):
         ]
         self.assertIsNone(health_hook.detect_written_artifact(steps_no_artifact, None))
 
+    def test_check_plan_exists(self):
+        # When artifact_dir is None
+        self.assertFalse(health_hook.check_plan_exists([], None))
+
+        # When artifact_dir has implementation_plan.md and not sliced
+        brain_dir = Path("C:/Users/YuriyDzhenyeyev/.gemini/antigravity/brain") / REAL_CONV_ID
+        if (brain_dir / "implementation_plan.md").exists():
+            self.assertTrue(health_hook.check_plan_exists([], brain_dir, is_sliced=False))
+
     def test_slice_transcript_steps(self):
         steps = [
             {"step_index": 10, "type": "USER_INPUT"},
@@ -180,16 +143,63 @@ class TestHealthHookSubprocess(unittest.TestCase):
         except json.JSONDecodeError as err:
             self.fail(f"Hook stdout is not valid JSON: {proc.stdout!r} ({err})")
 
-    def test_empty_and_invalid_payloads(self):
-        # Empty dict
-        out = self._run_hook({})
+    def test_payload_parsing_and_bom(self):
+        """Tests payload parsing, UTF-8 BOM prefix handling, empty input, and malformed JSON."""
+        # 1. Valid payload with UTF-8 BOM
+        proc_bom = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "health_hook.py")],
+            input="\ufeff" + json.dumps({"conversationId": REAL_CONV_ID, "stepIdx": 550}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(proc_bom.returncode, 0)
+        out_bom = json.loads(proc_bom.stdout.strip())
+        self.assertIn("injectSteps", out_bom)
+
+        # 2. Empty input
+        proc_empty = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "health_hook.py")],
+            input="",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(proc_empty.returncode, 0)
+        self.assertEqual(json.loads(proc_empty.stdout.strip()), {})
+
+        # 3. Malformed JSON
+        proc_invalid = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "health_hook.py")],
+            input="{not valid json",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(proc_invalid.returncode, 0)
+        self.assertEqual(json.loads(proc_invalid.stdout.strip()), {})
+
+        # 4. Unknown conversation ID
+        out_unknown = self._run_hook({"conversationId": "00000000-0000-0000-0000-000000000000"})
+        self.assertEqual(out_unknown, {})
+
+    def test_lean_conversation_silent(self):
+        """Tests that a LEAN conversation returns empty JSON {}."""
+        search_dirs = count_tokens.get_search_directories()
+        recent = count_tokens.list_conversations(search_dirs, limit=30)
+        lean_id = None
+        for r in recent:
+            stats = count_tokens.analyze_conversation_tokens(Path(r["db_path"]), search_dirs)
+            if stats.get("health", {}).get("status") == "LEAN":
+                lean_id = r["id"]
+                break
+        if not lean_id:
+            lean_id = "38d3c86d-3f17-4259-8a52-d1b6f239ee2e"
+
+        out = self._run_hook({"conversationId": lean_id})
         self.assertEqual(out, {})
 
-        # Unknown conversation ID
-        out = self._run_hook({"conversationId": "00000000-0000-0000-0000-000000000000"})
-        self.assertEqual(out, {})
-
-    def test_real_conversation_step_550_qa_quiet_mode(self):
+    def test_heavy_conversation_qa_mode(self):
         """
         Step 550 of 82061474 is an in-progress Q&A inquiry:
         User asks: 'are "banned / blocked / rate-limited" standard values...'
@@ -198,6 +208,7 @@ class TestHealthHookSubprocess(unittest.TestCase):
         - injectSteps contains quiet telemetry advisory.
         - Mentions '🔴 HEAVY' and 'Do NOT nag the user'.
         - Does NOT contain handoff prompt ('Please implement...').
+        - Does NOT contain '| Active Plan'.
         """
         out = self._run_hook({"conversationId": REAL_CONV_ID, "stepIdx": 550})
         self.assertIn("injectSteps", out)
@@ -209,8 +220,9 @@ class TestHealthHookSubprocess(unittest.TestCase):
         self.assertIn("Do NOT nag the user", msg)
         self.assertNotIn("Please implement", msg)
         self.assertNotIn("Lossless Handoff", msg)
+        self.assertNotIn("| Active Plan", msg)
 
-    def test_real_conversation_step_558_transition_boundary(self):
+    def test_heavy_conversation_artifact_boundary(self):
         """
         Step 558 of 82061474 occurs immediately after step 556 authored implementation_plan.md.
         Expects:
@@ -231,26 +243,16 @@ class TestHealthHookSubprocess(unittest.TestCase):
         self.assertIn('Reference parent conversation: @[conversation:"Bridge Handover Bug Analysis"].', msg)
         self.assertIn("Advise the user to paste this block into a fresh conversation", msg)
 
-    def test_real_conversation_direct_invocation(self):
-        """Tests health_hook.py without stepIdx (evaluates end of transcript)."""
-        out = self._run_hook({"conversationId": REAL_CONV_ID})
-        self.assertIn("injectSteps", out)
-        steps = out["injectSteps"]
-        self.assertEqual(len(steps), 1)
-        msg = steps[0].get("ephemeralMessage", "")
-        self.assertIn("[TRANSITION BOUNDARY: 🔴 HEAVY CONTEXT", msg)
-        self.assertIn("implementation_plan.md", msg)
-
-    def test_execution_approval_boundary(self):
+    def test_heavy_conversation_active_plan_telemetry(self):
         """
-        Tests Condition B (Execution Approval Boundary):
-        User says 'proceed' when implementation_plan.md exists.
+        When implementation_plan.md exists in the brain directory and conversation is HEAVY,
+        but current step is a regular user turn (no artifact was authored in this turn).
         Expects:
         - Output is valid PreInvocation JSON.
-        - injectSteps contains execution boundary warning.
-        - Mentions 'The user requested execution, but this conversation is 🔴 HEAVY'.
-        - Instructs model to delegate to worker subagent or launch fresh thread.
-        - Contains embedded Lossless Handoff prompt.
+        - injectSteps contains Active Plan telemetry.
+        - Contains '[Context Telemetry: 🔴 HEAVY (...) | Active Plan]'.
+        - Instructs model: if user approves execution, delegate or fresh thread;
+          if user clarifies/inquires, answer concisely without nagging.
         """
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as tf:
@@ -258,7 +260,7 @@ class TestHealthHookSubprocess(unittest.TestCase):
                 "step_index": 1,
                 "source": "USER_EXPLICIT",
                 "type": "USER_INPUT",
-                "content": "<USER_REQUEST>\nproceed\n</USER_REQUEST>"
+                "content": "<USER_REQUEST>\nsounds good, please proceed\n</USER_REQUEST>"
             }) + "\n")
             temp_path = tf.name
 
@@ -274,13 +276,25 @@ class TestHealthHookSubprocess(unittest.TestCase):
             steps = out["injectSteps"]
             self.assertEqual(len(steps), 1)
             msg = steps[0].get("ephemeralMessage", "")
-            self.assertIn("[EXECUTION BOUNDARY IN 🔴 HEAVY CONTEXT", msg)
-            self.assertIn("The user requested execution, but this conversation is 🔴 HEAVY", msg)
-            self.assertIn("package the scope into an Execution Packet and immediately delegate to a worker subagent", msg)
-            self.assertIn("Please implement NIP-20 Prefix-Aware Reactive Backoff & Circuit Breaker", msg)
+            self.assertIn("[Context Telemetry: 🔴 HEAVY", msg)
+            self.assertIn("| Active Plan", msg)
+            self.assertIn("If the user is approving, confirming, or requesting implementation", msg)
+            self.assertIn("Per Universal Rules § 5 & § 6, do NOT execute code edits directly in this main thread", msg)
+            self.assertIn("If the user is asking an inquiry or clarifying", msg)
+            self.assertIn("Do NOT nag the user", msg)
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+
+    def test_real_conversation_direct_invocation(self):
+        """Tests health_hook.py without stepIdx (evaluates end of transcript)."""
+        out = self._run_hook({"conversationId": REAL_CONV_ID})
+        self.assertIn("injectSteps", out)
+        steps = out["injectSteps"]
+        self.assertEqual(len(steps), 1)
+        msg = steps[0].get("ephemeralMessage", "")
+        self.assertIn("[TRANSITION BOUNDARY: 🔴 HEAVY CONTEXT", msg)
+        self.assertIn("implementation_plan.md", msg)
 
 
 if __name__ == "__main__":
